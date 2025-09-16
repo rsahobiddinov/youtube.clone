@@ -1,12 +1,17 @@
-import { ModeToggle } from "@/components/mode-toggle";
-
+import CategorySection from "../components/Category-Section"
+import Showcase from '../components/Showcase'
 const HomePage = () => {
-  return (
-    <div>
-      HomePage
-      <ModeToggle />
-    </div>
-  );
-};
+     return (
+          <>
+               <main className="category-section w-full h-[40px]">
+                    <CategorySection />
+               </main>
 
-export default HomePage;
+               <main className="showcase pr-2">
+                    <Showcase />
+               </main>
+          </>
+     )
+}
+
+export default HomePage
