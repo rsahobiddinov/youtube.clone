@@ -1,27 +1,43 @@
+import { join } from 'path';
 import { Module } from '@nestjs/common';
-import { UsersModule } from './modules/users/users.module';
+import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './modules/auth/auth.module';
-import { CoreModule } from './core/core.module';
-import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
-import TransformInterceoptor from './common/interceptors/transform.interceptor';
-import { AuthGuard } from './common/guards/auth.guard';
-import { ChannelModule } from './modules/channel/channel.module';
+import { UsersModule } from './modules/users/users.module';
+import { DatabaseModule } from './core/database/database.module';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { APP_INTERCEPTOR } from '@nestjs/core';
+import { TransformInterceptor } from './common/interceptors/transform.intercptors';
 import { VideoModule } from './modules/video/video.module';
-import { CommentsModule } from './modules/comments/comments.module';
+import { CoreModule } from './core/core.module';
+import { AnalyticsModule } from './modules/analytics/analytics.module';
+import { ChannelModule } from './modules/channel/channel.module';
+import { CommentModule } from './modules/comment/comment.module';
 import { PlaylistModule } from './modules/playlist/playlist.module';
 import { AdminModule } from './modules/admin/admin.module';
 
 @Module({
-  imports: [UsersModule, AuthModule, CoreModule, ChannelModule, VideoModule, CommentsModule, PlaylistModule, AdminModule],
-  controllers: [],
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+    }),
+    ServeStaticModule.forRoot({
+      rootPath: join(process.cwd(), 'uploads'),
+    }),
+    AuthModule,
+    UsersModule,
+    DatabaseModule,
+    VideoModule,
+    AnalyticsModule,
+    CoreModule,
+    ChannelModule,
+    CommentModule,
+    PlaylistModule,
+    AdminModule,
+  ],
   providers: [
     {
       provide: APP_INTERCEPTOR,
-      useClass: TransformInterceoptor,
-    },
-    {
-      provide: APP_GUARD,
-      useClass: AuthGuard,
+      useClass: TransformInterceptor,
     },
   ],
 })

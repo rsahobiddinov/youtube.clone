@@ -1,26 +1,30 @@
-import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 
 @Injectable()
-export class PrismaService implements OnModuleInit, OnModuleDestroy {
-  public prisma: PrismaClient;
-  constructor() {
-    this.prisma = new PrismaClient();
-  }
+export class PrismaService
+  extends PrismaClient
+  implements OnModuleInit, OnModuleDestroy
+{
+  private readonly logger = new Logger(PrismaService.name);
+
   async onModuleInit() {
     try {
-      await this.prisma.$connect();
-      console.log('prisma connected');
+      await this.$connect();
+      this.logger.log('Database connected!!');
     } catch (error) {
-      console.log(error);
+      throw new InternalServerErrorException(error.message);
     }
   }
+
   async onModuleDestroy() {
-    try {
-      await this.prisma.$disconnect();
-    } catch (error) {
-      console.log(error);
-      process.exit(1);
-    }
+    await this.$disconnect();
+    process.exit(1);
   }
 }

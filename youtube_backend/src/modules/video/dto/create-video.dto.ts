@@ -10,10 +10,6 @@ export class CreateVideoDto {
   @IsOptional()
   description: string;
 
-  @IsString()
-  @IsOptional()
-  thumbnail: string;
-
   @IsNumber()
   @Type(() => Number)
   duration: number;

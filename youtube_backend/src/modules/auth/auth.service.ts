@@ -1,111 +1,127 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
-  InternalServerErrorException,
-  NotFoundException,
 } from '@nestjs/common';
-import { CreateAuthDto } from './dto/create-auth.dto';
-import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import * as bcrypt from 'bcrypt';
 import { PrismaService } from 'src/core/database/prisma.service';
-import bcrypt from 'bcrypt';
-import { OtpService } from './otp.service';
-import { VerifyOtpDto } from './dto/verify-otp.dto';
-import { RegisterAuthDto } from './dto/register-auth.dto';
-import { VerifyCodeLoginDto } from './dto/verify.code.login.dto';
-import { LoginAuthDto } from './dto/login.auth.dto';
 
 @Injectable()
 export class AuthService {
   constructor(
-    private configService: ConfigService,
-    private jwtService: JwtService,
     private db: PrismaService,
-    private otpService: OtpService,
+    private jwt: JwtService,
   ) {}
-  async sendOtpUser(createAuthDto: CreateAuthDto) {
-    const findUser = await this.db.prisma.users.findFirst({
-      where: { phoneNumber: createAuthDto.phoneNumber },
+
+  async OAuthGoogleCallback(user: any): Promise<string> {
+    const findUser = await this.db.user.findFirst({
+      where: { email: user.email },
+      include: { OAuthAccount: true },
     });
 
-    if (findUser) throw new ConflictException('Phone number already existed');
-    const res = await this.otpService.sendOtp(createAuthDto.phoneNumber);
-    if (!res) throw new InternalServerErrorException('Server Error');
-    return { message: 'Code sended' };
-  }
+    if (!findUser) {
+      const newUser = await this.db.user.create({
+        data: {
+          email: user.email,
+          firstName: user.given_name || '',
+          lastName: user.family_name || '',
+          username: user.name || user.email.split('@')[0],
+          password: await bcrypt.hash(Math.random().toString(36).slice(-8), 12),
+        },
+      });
 
-  async verifyOtp(data: VerifyOtpDto) {
-    const key = `user:${data.phoneNumber}`;
-    const sessionToken = await this.otpService.verifyOtpSendedUser(
-      key,
-      data.code,
-      data.phoneNumber,
+      await this.db.oAuthAccount.create({
+        data: {
+          provider: 'Google',
+          providerId: user.sub,
+          userId: newUser.id,
+        },
+      });
+
+      const token = await this.jwt.signAsync({ userId: newUser.id });
+      return token;
+    }
+
+    const findAccount = findUser.OAuthAccount.find(
+      (account) => account.provider === 'Google',
     );
-    return { message: 'success', statusCode: 200, sessionToken };
-  }
 
-  async register(data: RegisterAuthDto) {
-    const key = `session_token:${data.phoneNumber}`;
-    await this.otpService.checkSessionTokenUser(key, data.session_token);
-    const hashedPassword = await bcrypt.hash(data.password, 12);
-    const checkEmail = await this.db.prisma.users.findFirst({
-      where: { email: data.email },
-    });
-    const checkPhone = await this.db.prisma.users.findFirst({
-      where: { phoneNumber: data.phoneNumber },
-    });
-    const checkUsername = await this.db.prisma.users.findFirst({
-      where: { username: data.username },
-    });
-    if (checkEmail) throw new ConflictException('This email already existed!');
-    if (checkPhone)
-      throw new ConflictException('This phone number already existed!');
-    if (checkUsername)
-      throw new ConflictException('This username already existed!');
-    const { session_token, ...userData } = data;
-    const user = await this.db.prisma.users.create({
-      data: { ...userData, password: hashedPassword },
-    });
-    const token = this.jwtService.sign({ userId: user.id });
+    if (!findAccount) {
+      await this.db.oAuthAccount.create({
+        data: {
+          provider: 'Google',
+          providerId: user.sub,
+          userId: findUser.id,
+        },
+      });
+    }
+
+    const token = await this.jwt.signAsync({ userId: findUser.id });
     return token;
   }
 
-  async loginWithPassword(data: LoginAuthDto) {
-    const findUser = await this.db.prisma.users.findFirst({
-      where: { phoneNumber: data.phoneNumber },
+  async register(data: {
+    email: string;
+    password: string;
+    firstName: string;
+    lastName: string;
+    username: string;
+  }): Promise<string> {
+    const findUser = await this.db.user.findFirst({
+      where: {
+        email: data.email,
+      },
     });
 
-    if (!findUser) throw new NotFoundException('User not found');
+    if (findUser) {
+      throw new ConflictException('User already exists');
+    }
+
+    const hashedPassword = await bcrypt.hash(data.password, 12);
+
+    const user = await this.db.user.create({
+      data: {
+        ...data,
+        password: hashedPassword,
+      },
+    });
+
+    const token = await this.jwt.signAsync({
+      userId: user.id,
+    });
+
+    return token;
+  }
+
+  async login(data: { email: string; password: string }): Promise<string> {
+    const find_user = await this.db.user.findFirst({
+      where: {
+        email: data.email,
+      },
+    });
+
+    if (!find_user) {
+      throw new BadRequestException('User not found!');
+    }
+
+    if (!find_user?.password) {
+      throw new BadRequestException('password not set');
+    }
 
     const comparePassword = await bcrypt.compare(
       data.password,
-      findUser.password,
+      find_user.password,
     );
 
-    if (!comparePassword) throw new NotFoundException('Password incorrect');
+    if (!comparePassword) {
+      throw new BadRequestException('Email or Password incorrect');
+    }
 
-    const token = this.jwtService.sign({ userId: findUser.id });
-    return token;
-  }
-
-  async sendCodeLogin(phoneNumber: string) {
-    const res = await this.otpService.sendOtp(phoneNumber);
-    if (!res) throw new InternalServerErrorException('Sms server error');
-    return { message: 'code sended' };
-  }
-
-  async verifyCodeLogin(data: VerifyCodeLoginDto) {
-    const key = `user:${data.phoneNumber}`;
-    const findUser = await this.db.prisma.users.findFirst({
-      where: { phoneNumber: data.phoneNumber },
+    const token = await this.jwt.signAsync({
+      userId: find_user.id,
     });
-    if (!findUser)
-      throw new NotFoundException(
-        'User not found, you have to enter registration',
-      );
-    await this.otpService.verifyCodeLogin(key, data.code);
-    await this.otpService.delSessionTokenUser(key);
-    const token = await this.jwtService.signAsync({ userId: findUser.id });
+
     return token;
   }
 }

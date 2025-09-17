@@ -1,175 +1,195 @@
 import {
-  ConflictException,
   Injectable,
   NotFoundException,
+  ForbiddenException,
 } from '@nestjs/common';
-import { UpdateChannelDto } from './dto/update-channel.dto';
 import { PrismaService } from 'src/core/database/prisma.service';
 
 @Injectable()
 export class ChannelService {
-  constructor(private db: PrismaService) {}
-  async updateChannel(
-    banner: string,
-    channelData: UpdateChannelDto,
-    id: string,
-  ) {
-    const findChannel = await this.db.prisma.users.findFirst({ where: { id } });
-    if (!findChannel) throw new NotFoundException('channel not found');
-    const updatedChannel = await this.db.prisma.users.update({
-      where: { id },
-      data: { ...channelData, channelBanner: banner },
-    });
-    const { password, ...channelInfo } = updatedChannel;
-    return channelInfo;
-  }
+  constructor(private prisma: PrismaService) {}
 
-  async getChannel(username: string, id: string) {
-    const findChannel = await this.db.prisma.users.findFirst({
-      where: { username },
+  async getChannelInfo(username: string, viewerId?: string) {
+    const user = await this.prisma.user.findFirst({
+      where: {
+        username: {
+          equals: username,
+          mode: 'insensitive',
+        },
+      },
       select: {
         id: true,
         username: true,
+        firstName: true,
+        lastName: true,
+        avatar: true,
         channelName: true,
         channelDescription: true,
-        avatar: true,
         channelBanner: true,
-        subscribersCount: true,
         totalViews: true,
+        createdAt: true,
+        is_email_verified: true,
+        _count: {
+          select: {
+            subscribers: true,
+            videos: true,
+          },
+        },
       },
     });
-    if (!findChannel) throw new NotFoundException('Channel not found');
-    const videosCount = await this.db.prisma.video.aggregate({
-      where: { authorId: findChannel.id },
-      _count: true,
-    });
-    const checkSubscription = await this.db.prisma.subscription.findFirst({
-      where: { channelId: findChannel.id, subscriberId: id },
-    });
+
+    if (!user) {
+      throw new NotFoundException('Channel not found');
+    }
+
+    let isSubscribed: boolean | null = null;
+
+    if (viewerId) {
+      const sub = await this.prisma.subscription.findUnique({
+        where: {
+          subscriberId_channelId: {
+            subscriberId: viewerId,
+            channelId: user.id,
+          },
+        },
+      });
+
+      isSubscribed = !!sub;
+    }
+
     return {
-      ...findChannel,
-      videosCount: videosCount._count,
-      joindedAt: checkSubscription?.createdAt,
-      isSubscribed: checkSubscription ? true : false,
+      id: user.id,
+      username: user.username,
+      channelName: user.channelName || `${user.firstName} ${user.lastName}`,
+      channelDescription: user.channelDescription || '',
+      avatar: user.avatar || null,
+      channelBanner: user.channelBanner || null,
+      subscribersCount: user._count.subscribers,
+      totalViews: user.totalViews || 0,
+      videosCount: user._count.videos,
+      joinedAt: user.createdAt,
+      isVerified: user.is_email_verified,
+      isSubscribed: isSubscribed,
     };
   }
 
-  async subscribe(userId: string, channelId: string, notification: boolean) {
-    const findChannel = await this.db.prisma.users.findFirst({
-      where: { id: channelId },
+  async getChannelVideos(
+    username: string,
+    limit: number,
+    page: number,
+    sort: string,
+  ) {
+    const user = await this.prisma.user.findUnique({
+      where: { username },
     });
-    if (!findChannel) throw new NotFoundException('Channel not found');
-    const checkSubscription = await this.db.prisma.subscription.findFirst({
-      where: { channelId, subscriberId: userId },
-    });
-    if (checkSubscription)
-      throw new ConflictException('you already followed this channel');
-    await this.db.prisma.subscription.create({
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    return (
+      await this.prisma.video.findMany({
+        where: {
+          authorId: user.id,
+          visibility: 'PUBLIC',
+          status: 'PUBLISHED',
+        },
+        take: limit,
+        skip: (page - 1) * limit,
+        orderBy: {
+          createdAt: sort === 'oldest' ? 'asc' : 'desc',
+        },
+      })
+    ).map((video) => ({
+      ...video,
+      viewsCount: Number(video.viewsCount),
+      likesCount: video.likesCount,
+      dislikesCount: video.dislikesCount,
+    }));
+  }
+
+  async updateChannel(userId: string, dto: any) {
+    return this.prisma.user.update({
+      where: { id: userId },
       data: {
-        subscriberId: userId,
-        channelId,
-        notificationsEnabled: notification,
+        channelName: dto.channelName,
+        channelDescription: dto.channelDescription,
+        channelBanner: dto.channelBanner,
       },
     });
   }
 
-  async unsubscribe(userId: string, channelId: string) {
-    const checkSubscription = await this.db.prisma.subscription.findFirst({
-      where: { channelId, subscriberId: userId },
+  async subscribe(viewerId: string, channelId: string) {
+    if (viewerId === channelId) {
+      throw new ForbiddenException("You can't subscribe to yourself");
+    }
+
+    const exists = await this.prisma.subscription.findUnique({
+      where: {
+        subscriberId_channelId: {
+          subscriberId: viewerId,
+          channelId: channelId,
+        },
+      },
     });
-    if (!checkSubscription) new NotFoundException('subscription not found');
-    await this.db.prisma.subscription.delete({
-      where: { id: checkSubscription?.id },
+
+    if (exists) {
+      return { message: 'Already subscribed' };
+    }
+
+    await this.prisma.subscription.create({
+      data: {
+        subscriberId: viewerId,
+        channelId: channelId,
+      },
     });
+
+    return { message: 'Subscribed successfully' };
   }
 
-  async getSubscription(id: string, limit: number, page: number) {
-    const findChannel = await this.db.prisma.users.findFirst({ where: { id } });
-    if (!findChannel) throw new NotFoundException('Channel not found');
-    const [subscriptions, totalCount] = await Promise.all([
-      this.db.prisma.subscription.findMany({
-        where: { channelId: id },
-        skip: (page - 1) * limit,
-        take: limit,
-        select: {
-          id: true,
-          channel: {
-            select: {
-              id: true,
-              username: true,
-              avatar: true,
-              channelBanner: true,
-              firstName: true,
-              lastName: true,
-            },
-          },
-          subscriber: {
-            select: {
-              id: true,
-              username: true,
-              avatar: true,
-              channelBanner: true,
-              firstName: true,
-              lastName: true,
-            },
-          },
+  async unsubscribe(viewerId: string, channelId: string) {
+    await this.prisma.subscription.delete({
+      where: {
+        subscriberId_channelId: {
+          subscriberId: viewerId,
+          channelId: channelId,
         },
-      }),
-      this.db.prisma.subscription.count({
-        where: { channelId: id },
-      }),
-    ]);
+      },
+    });
 
-    return {
-      totalCount,
-      currentPage: page,
-      totalPages: Math.ceil(totalCount / limit),
-      subscriptions,
-    };
+    return { message: 'Unsubsciribed successfully' };
   }
 
-  async getSubscriptionFeed(id: string, limit: number, page: number) {
-    const findChannel = await this.db.prisma.users.findFirst({ where: { id } });
-    if (!findChannel) throw new NotFoundException('Channel not found');
-    const [subscriptions, totalCount] = await Promise.all([
-      this.db.prisma.subscription.findMany({
-        where: { subscriberId: id },
-        skip: (page - 1) * limit,
-        take: limit,
-        select: {
-          id: true,
-          channel: {
-            select: {
-              id: true,
-              username: true,
-              avatar: true,
-              channelBanner: true,
-              firstName: true,
-              lastName: true,
-            },
-          },
-          subscriber: {
-            select: {
-              id: true,
-              username: true,
-              avatar: true,
-              channelBanner: true,
-              firstName: true,
-              lastName: true,
-            },
-          },
-        },
-      }),
-      this.db.prisma.subscription.count({
-        where: { subscriberId: id },
-      }),
-    ]);
+  async getSubscriptions(userId: string, limit: number, page: number) {
+    const subscriptions = await this.prisma.subscription.findMany({
+      where: { subscriberId: userId },
+      take: limit,
+      skip: (page - 1) * limit,
+      include: {
+        channel: true,
+      },
+    });
 
-    return {
-      totalCount,
-      currentPage: page,
-      totalPages: Math.ceil(totalCount / limit),
-      subscriptions,
-    };
+    return subscriptions.map((sub) => sub.channel);
+  }
+
+  async getSubscriptionFeed(userId: string, limit: number, page: number) {
+    const subscriptions = await this.prisma.subscription.findMany({
+      where: { subscriberId: userId },
+      select: { channelId: true },
+    });
+
+    const channelIds = subscriptions.map((s) => s.channelId);
+
+    return this.prisma.video.findMany({
+      where: {
+        authorId: { in: channelIds },
+        visibility: 'PUBLIC',
+        status: 'PUBLISHED',
+      },
+      take: limit,
+      skip: (page - 1) * limit,
+      orderBy: { createdAt: 'desc' },
+    });
   }
 }

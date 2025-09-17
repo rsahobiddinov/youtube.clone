@@ -1,80 +1,79 @@
 import {
   Controller,
+  Get,
   Post,
   Body,
+  Req,
   Res,
-  SetMetadata,
-  HttpStatus,
-  HttpCode,
+  UseGuards,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
-import { CreateAuthDto } from './dto/create-auth.dto';
-import { Response } from 'express';
-import { VerifyOtpDto } from './dto/verify-otp.dto';
-import { RegisterAuthDto } from './dto/register-auth.dto';
-import { LoginAuthDto } from './dto/login.auth.dto';
-import { SendCodeLoginDto } from './dto/send.code.login.dto';
-import { VerifyCodeLoginDto } from './dto/verify.code.login.dto';
+import { AuthGuard } from '@nestjs/passport';
+import { Request, Response } from 'express';
 
 @Controller('auth')
-@SetMetadata('isFreeAuth', true)
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  @Post('send-otp')
-  async sendOtpUser(@Body() body: CreateAuthDto) {
-    const response = await this.authService.sendOtpUser(body);
-    return response;
+  @Get('google')
+  @UseGuards(AuthGuard('google'))
+  async googleAuth() {
+    console.log('Google OAuth process started');
   }
 
-  @Post('verify-otp')
-  async verifyOtp(@Body() body: VerifyOtpDto) {
-    const response = await this.authService.verifyOtp(body);
-    return response;
+  @Get('google/callback')
+  @UseGuards(AuthGuard('google'))
+  async googleAuthCallback(@Req() req: Request, @Res() res: Response) {
+    const user = req.user;
+    const token = await this.authService.OAuthGoogleCallback(user);
+
+    res.cookie('auth_token', token, {
+      httpOnly: true,
+      secure: false,
+      sameSite: 'strict',
+      maxAge: 1000 * 60 * 60 * 24,
+    });
+    return res.redirect('http://localhost:5173');
+  }
+
+  @Post('login')
+  async login(
+    @Body() data: { email: string; password: string },
+    @Res() res: Response,
+  ) {
+    const token = await this.authService.login(data);
+
+    res.cookie('auth_token', token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'strict',
+      maxAge: 1000 * 60 * 60 * 24,
+    });
+
+    return res.json({ message: 'Login successful' });
   }
 
   @Post('register')
   async register(
-    @Body() body: RegisterAuthDto,
-    @Res({ passthrough: true }) res: Response,
+    @Body()
+    data: {
+      email: string;
+      password: string;
+      firstName: string;
+      lastName: string;
+      username: string;
+    },
+    @Res() res: Response,
   ) {
-    const token = await this.authService.register(body);
-    res.cookie('token', token, {
-      maxAge: 2.1 * 3600 * 1000,
-      httpOnly: true,
-    });
-    return { token };
-  }
+    const token = await this.authService.register(data);
 
-  @Post('login-with-password')
-  @HttpCode(200)
-  async loginWithPassword(
-    @Body() data: LoginAuthDto,
-    @Res({ passthrough: true }) res: Response,
-  ) {
-    const token = await this.authService.loginWithPassword(data);
-    res.cookie('token', token, {
-      maxAge: 2.1 * 3600 * 1000,
+    res.cookie('auth_token', token, {
       httpOnly: true,
+      secure: true,
+      sameSite: 'strict',
+      maxAge: 1000 * 60 * 60 * 24,
     });
-    return { token };
-  }
 
-  @Post('send-code-login')
-  async sendCodeLogin(@Body() body: SendCodeLoginDto) {
-    return await this.authService.sendCodeLogin(body.phoneNumber);
-  }
-
-  @Post('verify-code-login')
-  async verifyCodeLogin(
-    @Body() body: VerifyCodeLoginDto,
-    @Res({ passthrough: true }) res: Response,
-  ) {
-    const token = await this.authService.verifyCodeLogin(body);
-    res.cookie('token', token, {
-      maxAge: 2.1 * 3600 * 1000,
-      httpOnly: true,
-    });
-    return { token };
+    return res.json({ message: 'Registration successful' });
   }
 }
