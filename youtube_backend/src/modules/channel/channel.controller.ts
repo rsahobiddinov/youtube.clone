@@ -1,74 +1,98 @@
 import {
   Controller,
   Get,
-  Param,
-  Request,
-  Put,
-  Body,
-  UseGuards,
   Post,
+  Body,
+  Patch,
+  Param,
   Delete,
+  Put,
+  UseInterceptors,
+  UploadedFile,
+  Req,
+  SetMetadata,
+  UseGuards,
   Query,
 } from '@nestjs/common';
 import { ChannelService } from './channel.service';
-import { AuthGuard } from 'src/common/guard/auth.guard';
+import { SubscribeDto } from './dto/subscribe-channel.dto';
 import { UpdateChannelDto } from './dto/update-channel.dto';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { Request } from 'express';
+import { RoleGuard } from 'src/common/guards/role.guard';
 
 @Controller('channels')
 export class ChannelController {
   constructor(private readonly channelService: ChannelService) {}
 
-  @Get('/:username')
-  async getChannel(@Param('username') username: string) {
-    // console.log(username);
-    return this.channelService.getChannelInfo(username);
-  }
-
-  @Get(':username/videos')
-  async getChannelVideos(
-    @Param('username') username: string,
-    @Query('limit') limit = 20,
-    @Query('page') page = 1,
-    @Query('sort') sort = 'newest',
-  ) {
-    return this.channelService.getChannelVideos(username, +limit, +page, sort);
-  }
-
-  @UseGuards(AuthGuard)
   @Put('me')
-  async updateChannel(@Request() req, @Body() dto: UpdateChannelDto) {
-    return this.channelService.updateChannel(req.user?.id, dto);
-  }
-
-  @UseGuards(AuthGuard)
-  @Post(':userId/subscribe')
-  async subscribe(@Request() req, @Param('userId') userId: string) {
-    return this.channelService.subscribe(req.user?.id, userId);
-  }
-
-  @UseGuards(AuthGuard)
-  @Delete(':userId/subscribe')
-  async unsubscribe(@Request() req, @Param('userId') userId: string) {
-    return this.channelService.unsubscribe(req.user?.id, userId);
-  }
-
-  @UseGuards(AuthGuard)
-  @Get('subscriptions')
-  async getSubscriptions(
-    @Request() req,
-    @Query('limit') limit = 20,
-    @Query('page') page = 1,
+  @UseInterceptors(FileInterceptor('banner'))
+  async updateChannel(
+    @Body() body: UpdateChannelDto,
+    @UploadedFile() banner: Express.Multer.File,
+    @Req() req: Request,
   ) {
-    return this.channelService.getSubscriptions(req.user?.id, +limit, +page);
+    const id = req['userId'];
+    console.log(banner);
+    const bannerUrl = banner?.filename
+      ? `http://${process.env.HOST}:${process.env.PORT}/uploads/banners/${banner.filename}`
+      : '';
+    console.log(bannerUrl);
+    return await this.channelService.updateChannel(bannerUrl, body, id);
   }
 
-  @UseGuards(AuthGuard)
-  @Get('subscriptions/feed')
-  async getSubscriptionFeed(
-    @Request() req,
-    @Query('limit') limit = 20,
-    @Query('page') page = 1,
+  @Get(':username')
+  async getChannelInfo(
+    @Param('username') username: string,
+    @Req() req: Request,
   ) {
-    return this.channelService.getSubscriptionFeed(req.user?.id, +limit, +page);
+    const id = req['userId'];
+    return await this.channelService.getChannel(username, id);
+  }
+
+  @Post(':userid/subscribe')
+  async subscribe(
+    @Req() req: Request,
+    @Param('userid') id: string,
+    @Body() body: SubscribeDto,
+  ) {
+    const userId = req['userId'];
+    return await this.channelService.subscribe(
+      userId,
+      id,
+      body.notificationEnabled,
+    );
+  }
+
+  @Delete(':userid/unsubscribe')
+  async unsubscribe(@Req() req: Request, @Param('userid') channelId: string) {
+    const userId = req['userId'];
+    return await this.channelService.unsubscribe(userId, channelId);
+  }
+
+  @Get('feed/subscription')
+  async getFeedSubscription(
+    @Query('page') page: number,
+    @Query('limit') limit: number,
+    @Req() req: Request,
+  ) {
+    const userId = req['userId'];
+    console.log('kelyabdi', userId);
+
+    return await this.channelService.getSubscriptionFeed(userId, limit, page);
+  }
+
+  @Get()
+  @UseGuards(RoleGuard)
+  @SetMetadata('roles', ['SUPERADMIN', 'ADMIN', 'OWNER'])
+  async getSubscription(
+    @Query('page') page: number,
+    @Query('limit') limit: number,
+    @Req() req: Request,
+  ) {
+    const userId = req['userId'];
+    console.log(userId);
+
+    return await this.channelService.getSubscription(userId, limit, page);
   }
 }

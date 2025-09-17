@@ -6,15 +6,15 @@ export class CreateVideoDto {
   @IsString()
   title: string;
 
-  @IsString()
   @IsOptional()
+  @IsString()
   description: string;
 
   @IsNumber()
   @Type(() => Number)
   duration: number;
 
-  @IsEnum(Visibility)
   @IsOptional()
+  @IsEnum(Visibility)
   visibility: Visibility;
 }

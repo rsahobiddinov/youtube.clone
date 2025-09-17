@@ -1,19 +1,62 @@
-import { Controller, Get, Put, Body, Req, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  Query,
+  HttpCode,
+  Req,
+  Put,
+  UseInterceptors,
+  UseGuards,
+  SetMetadata,
+  UploadedFile,
+} from '@nestjs/common';
 import { UsersService } from './users.service';
-import { AuthGuard } from 'src/common/guard/auth.guard';
+import { UpdateUserDto } from './dto/update-user.dto';
+import { Request } from 'express';
+import { FileInterceptor } from '@nestjs/platform-express';
 
 @Controller('users')
-@UseGuards(AuthGuard)
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   @Get('me')
-  async getProfile(@Req() req) {
-    return await this.usersService.getUserById(req.user.id);
+  async getProfile(@Req() req: Request) {
+    const userId = req['userId'];
+    return await this.usersService.getProfile(userId);
   }
 
   @Put('me')
-  async updateProfile(@Req() req, @Body() body: any) {
-    return await this.usersService.updateUser(req.user.id, body);
+  @UseInterceptors(FileInterceptor('avatar'))
+  async updateProfile(
+    @Req() req: Request,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: UpdateUserDto,
+  ) {
+    const avatarPath = file?.filename
+      ? `http://${process.env.HOST}:4000/uploads/avatars/${file.filename}`
+      : '';
+    const userId = req['userId'];
+    return await this.usersService.updateUserProfile(avatarPath, body, userId);
+  }
+
+  @Get('me/history')
+  async getWatchHistory(
+    @Req() req: Request,
+    @Query('page') page: number,
+    @Query('limit') limit: number,
+  ) {
+    const userId = req['userId'];
+    return await this.usersService.getWatchHistory(page, limit, userId);
+  }
+
+  @Delete('me/history')
+  async deleteMyHistory(@Req() req: Request) {
+    const userId = req['userId'];
+    return await this.usersService.clearMyHistory(userId);
   }
 }

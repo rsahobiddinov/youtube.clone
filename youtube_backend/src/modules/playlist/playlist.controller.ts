@@ -1,75 +1,69 @@
 import {
   Controller,
+  Get,
   Post,
   Body,
+  Patch,
   Param,
-  Get,
+  Delete,
+  Req,
+  SetMetadata,
   Query,
   Put,
-  Delete,
-  UseGuards,
 } from '@nestjs/common';
 import { PlaylistService } from './playlist.service';
-import { AuthGuard } from 'src/common/guard/auth.guard';
-import {
-  AddVideoToPlaylistDto,
-  CreatePlaylistDto,
-  UpdatePlaylistDto,
-} from './dto/playlist.dto';
+import { CreatePlaylistDto } from './dto/create-playlist.dto';
+import { UpdatePlaylistDto } from './dto/update-playlist.dto';
+import { Request } from 'express';
+import { AddVideoPlaylistDto } from './dto/add.video.playlist.dto';
 
 @Controller('playlists')
 export class PlaylistController {
   constructor(private readonly playlistService: PlaylistService) {}
 
-  @UseGuards(AuthGuard)
   @Post()
-  async createPlaylist(
-    @Body() dto: CreatePlaylistDto,
-    @Query('userId') userId: string,
-  ) {
-    return this.playlistService.createPlaylist(userId, dto);
+  async createPlaylist(@Body() body: CreatePlaylistDto, @Req() req: Request) {
+    const userId = req['userId'];
+    return this.playlistService.createPlaylist(body, userId);
   }
 
-  @UseGuards(AuthGuard)
   @Post(':id/videos')
-  async addVideoToPlaylist(
+  async addVideoPlaylist(
     @Param('id') id: string,
-    @Body() dto: AddVideoToPlaylistDto,
+    @Body() body: AddVideoPlaylistDto,
   ) {
-    return this.playlistService.addVideoToPlaylist(id, dto);
+    return await this.playlistService.addVideoPlaylist(id, body);
   }
 
   @Get(':id')
-  async getPlaylist(@Param('id') id: string) {
-    return this.playlistService.getPlaylist(id);
+  @SetMetadata('isFreeAuth', true)
+  async getPlaylists(@Param('id') id: string) {
+    return await this.playlistService.getPlaylist(id);
   }
 
-  @Get('/user/:userId')
+  @Get('users/:userid')
+  @SetMetadata('isFreeAuth', true)
   async getUserPlaylists(
-    @Param('userId') userId: string,
-    @Query('limit') limit: string,
-    @Query('page') page: string,
+    @Param('userid') userId: string,
+    @Query('page') page: number,
+    @Query('limit') limit: number,
   ) {
-    const limitNum = parseInt(limit) || 20;
-    const pageNum = parseInt(page) || 1;
-    return this.playlistService.getUserPlaylists(userId, limitNum, pageNum);
+    return await this.playlistService.getUserPlaylists(userId, page, limit);
   }
 
-  @UseGuards(AuthGuard)
   @Put(':id')
   async updatePlaylist(
     @Param('id') id: string,
-    @Body() dto: UpdatePlaylistDto,
+    @Body() body: UpdatePlaylistDto,
   ) {
-    return this.playlistService.updatePlaylist(id, dto);
+    return await this.playlistService.updatePlaylist(id, body);
   }
 
-  @UseGuards(AuthGuard)
-  @Delete(':id/videos/:videoId')
-  async removeVideo(
+  @Delete(':id/videos/:videoid')
+  async deleteVideoFromPlaylis(
     @Param('id') id: string,
-    @Param('videoId') videoId: string,
+    @Param('videoid') videoId: string,
   ) {
-    return this.playlistService.removeVideo(id, videoId);
+    return await this.playlistService.deleteVideoFromPlaylist(id, videoId);
   }
 }

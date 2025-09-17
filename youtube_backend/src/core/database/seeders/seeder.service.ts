@@ -17,7 +17,6 @@ export class SeederService implements OnModuleInit {
     this.logger.log('Users seeders started');
 
     const email = this.configService.get('SP_EMAIL');
-    const phoneNumber = this.configService.get('SP_PHONE');
     const username = this.configService.get('SP_USERNAME');
     const password = this.configService.get('SP_PASSWORD');
 
@@ -30,7 +29,6 @@ export class SeederService implements OnModuleInit {
       await this.db.prisma.users.create({
         data: {
           email,
-          phoneNumber,
           username,
           password: hashedPassword,
           role: 'SUPERADMIN',

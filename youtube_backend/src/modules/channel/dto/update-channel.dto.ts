@@ -1,5 +1,11 @@
+import { IsOptional, IsString } from 'class-validator';
+
 export class UpdateChannelDto {
-  channelName?: string;
-  channelDescription?: string;
-  channelBanner?: string;
+  @IsOptional()
+  @IsString()
+  channelName: string;
+
+  @IsOptional()
+  @IsString()
+  channelDescription: string;
 }

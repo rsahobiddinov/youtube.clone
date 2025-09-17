@@ -4,20 +4,20 @@ import {
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
-import { PrismaService } from 'src/core/database/prisma.service';
-import fs from 'fs';
 import path from 'path';
+import { PrismaService } from 'src/core/database/prisma.service';
+import VideoServices from 'src/core/video.service';
+import fs from 'fs';
 import { Response } from 'express';
-import { VideoResolution } from './types';
-import VideoConvertService from './video_convert.service';
 import { CreateVideoDto } from './dto/create-video.dto';
 import deleteFile from 'src/common/utils/delete.file';
+import { UpdateVideoDto } from './dto/update-video.dto';
 
 @Injectable()
 export class VideoService {
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly videoConvertService: VideoConvertService,
+    private videoService: VideoServices,
+    private db: PrismaService,
   ) {}
   async uploadVideo(
     file: Express.Multer.File,
@@ -25,7 +25,7 @@ export class VideoService {
     id: string,
     thumbnail: Express.Multer.File,
   ) {
-    const findChannel = await this.prisma.user.findFirst({ where: { id } });
+    const findChannel = await this.db.prisma.users.findFirst({ where: { id } });
     if (!findChannel) {
       await deleteFile(file.filename);
       throw new NotFoundException('Channel not found');
@@ -38,7 +38,7 @@ export class VideoService {
     );
     const videoPath = path.join(process.cwd(), 'uploads', fileName);
     const resolution: any =
-      await this.videoConvertService.getVideoResolution(videoPath);
+      await this.videoService.getVideoResolution(videoPath);
     const resolutions = [
       { height: 240 },
       { height: 360 },
@@ -62,22 +62,20 @@ export class VideoService {
         },
       );
       await Promise.all(
-        this.videoConvertService.convertToResolutions(
+        this.videoService.convertToResolutions(
           videoPath,
           path.join(process.cwd(), 'uploads', 'videos', fileName.split('.')[0]),
           validResolutions,
         ),
       );
       fs.unlinkSync(videoPath);
-      const result = await this.prisma.video.create({
+      const result = await this.db.prisma.video.create({
         data: {
           ...videoData,
           videoUrl: fileNameData,
           authorId: id,
           status: 'PUBLISHED',
-          thumbnail: `/uploads/thumbnails/${thumbnail.filename}`,
-          fileSize: file.size,
-          folderName: file.filename,
+          thumbnail: `http://${process.env.HOST}:${process.env.PORT}/uploads/thumbnails/${thumbnail.filename}`,
         },
       });
       return {
@@ -92,64 +90,34 @@ export class VideoService {
     }
   }
 
-  async getAllVideos() {
-    const videos = await this.prisma.video.findMany({
-      orderBy: { createdAt: 'desc' },
-      include: { author: true, category: true, comments: true },
-    });
-
-    const serialized = videos.map((v) => ({
-      id: v.id,
-      title: v.title,
-      folderName: v.folderName,
-      description: v.description,
-      videoUrl: v.videoUrl || null,
-      thumbnail: v.thumbnail || '/uploads/thumbnails/default.jpg',
-      duration: v.duration,
-      viewsCount: Number(v.viewsCount) || 0,
-      likesCount: Number(v.likesCount) || 0,
-      dislikesCount: Number(v.dislikesCount) || 0,
-      commentsCount: v.comments.length,
-      publishedAt: v.createdAt.toISOString(),
-      tags: v.tags || [],
-      category: v.category ? v.category.title : 'General',
-      author: {
-        id: v.author.id,
-        username: v.author.username,
-        channelName: `${v.author.firstName} ${v.author.lastName}`,
-        avatar: v.author.avatar || '/uploads/avatars/default-avatar.jpg',
-      },
-    }));
-
-    return { success: true, data: serialized };
-  }
-
   async watchVideo(id: string, quality: string, range: string, res: Response) {
-    const video = await this.prisma.video.findUnique({
-      where: { id },
-      select: { folderName: true },
-    });
-
-    if (!video) throw new NotFoundException('Video topilmadi');
-
+    const findVideo = await this.db.prisma.video.findFirst({ where: { id } });
+    console.log(findVideo);
+    if (!findVideo) {
+      throw new NotFoundException('Video not found');
+    }
+    const fileName = findVideo.videoUrl.split(`\\`).at(-1);
     const baseQuality = `${quality}.mp4`;
-    const videoPath = path.join(
-      process.cwd(),
-      'uploads',
-      'videos',
-      video.folderName,
+    const basePath = path.join(process.cwd(), 'uploads', 'videos');
+    const readDir = fs.readdirSync(basePath);
+    const videoActivePath = path.join(
+      basePath,
+      fileName as string,
       baseQuality,
     );
-
-    if (!fs.existsSync(videoPath)) {
-      throw new NotFoundException('Video file not found on server');
-    }
-
-    const { size } = fs.statSync(videoPath);
+    if (!readDir.includes(fileName as string))
+      throw new NotFoundException('video not found 1');
+    const innerVideoDir = fs.readdirSync(
+      path.join(basePath, fileName as string),
+    );
+    if (!innerVideoDir.includes(baseQuality))
+      throw new NotFoundException('video quality not found');
+    const { size } = fs.statSync(videoActivePath);
     if (!range) {
       range = `bytes=0-1048575`;
     }
-    const { start, end, chunkSize } = this.videoConvertService.getChunkProps(
+
+    const { start, end, chunkSize } = this.videoService.getChunkProps(
       range,
       size,
     );
@@ -159,197 +127,143 @@ export class VideoService {
       'Content-Length': chunkSize,
       'Content-Type': 'video/mp4',
     });
-    const videoStream = fs.createReadStream(videoPath, { start, end });
-    videoStream.pipe(res);
+    const videoStream = fs.createReadStream(videoActivePath, {
+      start,
+      end,
+    });
+    let bytes = 0;
+    videoStream.on('data', (data) => {
+      bytes += data.length / 1024;
+    });
+    videoStream.on('end', () => {
+      console.log(bytes);
+    });
     videoStream.on('error', (err) => {
-      console.error('Stream error:', err);
-      res.sendStatus(500);
+      console.log(err);
     });
-  }
+    videoStream.pipe(res);
 
-  async getVideoStatus(videoId: string) {
-    const video = await this.prisma.video.findUnique({
-      where: { id: videoId },
-      select: {
-        id: true,
-        status: true,
-        videoUrl: true,
-      },
+    await this.db.prisma.video.update({
+      where: { id },
+      data: { viewsCount: findVideo.viewsCount + 1 },
     });
-
-    if (!video) {
-      throw new NotFoundException('Video topilmadi');
-    }
-
-    return {
-      success: true,
+    await this.db.prisma.users.update({
+      where: { id: findVideo.authorId },
       data: {
-        id: video.id,
-        status: video.status,
-        processingProgress: video.status === 'PUBLISHED' ? 100 : 65,
-        availableQualities: ['720p'],
-        estimatedTimeRemaining:
-          video.status === 'PUBLISHED' ? '0 minutes' : '2-5 minutes',
-      },
-    };
-  }
-
-  async getVideoDetails(videoId: string) {
-    const video = await this.prisma.video.findUnique({
-      where: { id: videoId },
-      include: {
-        author: true,
-        comments: true,
-        likes: true,
-        category: true,
-      },
-    });
-
-    if (!video) {
-      throw new NotFoundException('Video topilmadi');
-    }
-
-    return {
-      success: true,
-      data: {
-        id: video.id,
-        title: video.title,
-        description: video.description,
-        thumbnail:
-          video.thumbnail ||
-          `https://cdn.example.com/thumbnails/${video.id}.jpg`,
-        videoUrl: `https://cdn.example.com${video.videoUrl}`,
-        availableQualities: ['1080p', '720p', '480p', '360p'],
-        duration: video.duration,
-        viewsCount: video.viewsCount ? Number(video.viewsCount) : 0,
-        likesCount: video.likesCount ? Number(video.likesCount) : 0,
-        dislikesCount: video.dislikesCount ? Number(video.dislikesCount) : 0,
-        commentsCount: video.comments.length,
-        publishedAt: video.createdAt.toISOString(),
-        author: {
-          id: video.author.id,
-          username: video.author.username,
-          channelName: video.author.firstName + ' ' + video.author.lastName,
-          avatar: video.author.avatar,
-          subscribersCount: 0,
-          isVerified: true,
+        totalViews: {
+          increment: 1,
         },
-        tags: video.tags || [],
-        category: video.category ? video.category.title : 'General',
-      },
-    };
-  }
-
-  async updateVideo(videoId: string, userId: string, body: any) {
-    const video = await this.prisma.video.findUnique({
-      where: { id: videoId },
-    });
-
-    if (!video || video.authorId !== userId) {
-      throw new NotFoundException('Video topilmadi yoki ruxsat yo‘q');
-    }
-
-    await this.prisma.video.update({
-      where: { id: videoId },
-      data: {
-        title: body.title,
-        description: body.description,
-        visibility: body.visibility,
       },
     });
-
-    return { message: 'Video yangilandi' };
-  }
-
-  async deleteVideo(videoId: string, userId: string) {
-    const video = await this.prisma.video.findUnique({
-      where: { id: videoId },
+    const findWatchHistory = await this.db.prisma.watchHistory.findFirst({
+      where: { videoId: findVideo.id, userId: findVideo.authorId },
     });
-
-    if (!video || video.authorId !== userId) {
-      throw new NotFoundException("Video topilmadi yoki ruxsat yo'q");
+    if (!findWatchHistory) {
+      await this.db.prisma.watchHistory.create({
+        data: {
+          watchTime: 200,
+          userId: findVideo.authorId,
+          videoId: findVideo.id,
+        },
+      });
     }
-
-    await this.prisma.video.delete({ where: { id: videoId } });
-
-    return { message: "Video o'chirildi" };
   }
 
-  async getVideoFeed(query: any) {
-    const { page = 1, limit = 20, category, duration, sort } = query;
-    const skip = (page - 1) * limit;
-
-    let whereClause: any = { visibility: 'PUBLIC' };
-
-    if (category) whereClause.categoryId = category;
-
-    const orderBy: any = {};
-
-    if (sort === 'popular') orderBy.viewsCount = 'desc';
-    else if (sort === 'newest') orderBy.createdAt = 'desc';
-    else if (sort === 'oldest') orderBy.createdAt = 'asc';
-
-    const videos = await this.prisma.video.findMany({
-      where: whereClause,
-      take: Number(limit),
-      skip,
-      orderBy,
+  async getVideoDetails(id: string) {
+    const findVideo = await this.db.prisma.video.findFirst({
+      where: { id },
+      include: {
+        author: {
+          select: {
+            id: true,
+            username: true,
+            channelName: true,
+            avatar: true,
+            is_email_verified: true,
+          },
+        },
+      },
     });
-
-    const serialized = videos.map((v) => ({
-      ...v,
-      viewsCount: v.viewsCount ? Number(v.viewsCount) : 0,
-      likesCount: v.likesCount ? Number(v.likesCount) : 0,
-      dislikesCount: v.dislikesCount ? Number(v.dislikesCount) : 0,
-    }));
-
-    return { success: true, data: serialized };
+    if (!findVideo) throw new NotFoundException('Video not found');
+    return findVideo;
   }
 
-  async searchVideos(query: string, page = 1, limit = 20) {
-    const videos = await this.prisma.video.findMany({
+  async updateVideo(id: string, videoData: UpdateVideoDto) {
+    const findVideo = await this.db.prisma.video.findFirst({ where: { id } });
+    if (!findVideo) throw new NotFoundException('Video not found');
+    const result = await this.db.prisma.video.update({
+      where: { id },
+      data: videoData,
+      include: {
+        author: {
+          select: {
+            id: true,
+            username: true,
+            channelName: true,
+            avatar: true,
+            is_email_verified: true,
+          },
+        },
+      },
+    });
+    return { message: 'video successfull updated', data: result };
+  }
+
+  async deleteVideo(id: string) {
+    const findVideo = await this.db.prisma.video.findFirst({ where: { id } });
+    if (!findVideo) throw new NotFoundException('video not found');
+    const fileName = path.basename(findVideo.videoUrl);
+    const videoFolderPath = path.join(
+      process.cwd(),
+      'uploads',
+      'videos',
+      fileName,
+    );
+    await deleteFile(videoFolderPath);
+    await this.db.prisma.video.delete({ where: { id } });
+    return { message: 'Video successful deleted' };
+  }
+
+  async getVideosFeed(page: number, limit: number) {
+    const offset = (page - 1) * limit;
+    const videos = await this.db.prisma.video.findMany({
       where: {
-        OR: [
-          { title: { contains: query, mode: 'insensitive' } },
-          { description: { contains: query, mode: 'insensitive' } },
-        ],
-        visibility: 'PUBLIC',
+        status: 'PUBLISHED',
       },
-      take: Number(limit),
-      skip: (page - 1) * limit,
+      include: {
+        author: {
+          select: {
+            id: true,
+            username: true,
+            channelName: true,
+            avatar: true,
+            is_email_verified: true,
+          },
+        },
+      },
       orderBy: {
         createdAt: 'desc',
       },
+      skip: offset,
+      take: limit,
     });
-
-    const serialized = videos.map((v) => ({
-      ...v,
-      viewsCount: v.viewsCount ? Number(v.viewsCount) : 0,
-      likesCount: v.likesCount ? Number(v.likesCount) : 0,
-      dislikesCount: v.dislikesCount ? Number(v.dislikesCount) : 0,
-    }));
-
-    return { success: true, data: serialized };
-  }
-
-  async getTrendingVideos(category: string, region: string, timeframe: string) {
-    const videos = await this.prisma.video.findMany({
+    const totalVideos = await this.db.prisma.video.count({
       where: {
-        visibility: 'PUBLIC',
-      },
-      take: 20,
-      orderBy: {
-        viewsCount: 'desc',
+        status: 'PUBLISHED',
       },
     });
+    const totalPages = Math.ceil(totalVideos / limit);
 
-    const serialized = videos.map((v) => ({
-      ...v,
-      viewsCount: v.viewsCount ? Number(v.viewsCount) : 0,
-      likesCount: v.likesCount ? Number(v.likesCount) : 0,
-      dislikesCount: v.dislikesCount ? Number(v.dislikesCount) : 0,
-    }));
-
-    return { success: true, data: serialized };
+    return {
+      videos,
+      pagination: {
+        currentPage: page,
+        totalPages,
+        totalVideos,
+        limit,
+        hasNextPage: page < totalPages,
+        hasPreviousPage: page > 1,
+      },
+    };
   }
 }

@@ -3,15 +3,13 @@ import { IsEmail, IsEnum, IsOptional, IsString } from 'class-validator';
 
 export class RegisterAuthDto {
   @IsString()
-  phoneNumber: string;
+  @IsEmail()
+  email: string;
 
   @IsString()
   password: string;
 
-  @IsString()
-  @IsEmail()
-  email: string;
-
+  @IsOptional()
   @IsString()
   username: string;
 
@@ -26,7 +24,4 @@ export class RegisterAuthDto {
   @IsOptional()
   @IsEnum(Role)
   role: Role;
-
-  @IsString()
-  session_token: string;
 }
