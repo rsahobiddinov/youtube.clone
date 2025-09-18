@@ -1,0 +1,15 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.con {
+  width: 97%;
+  margin: 0 auto;
+}
+
+.ant-menu-item-selected {
+  background-color: rgba(128, 128, 128, 0.155) !important;
+}
+
